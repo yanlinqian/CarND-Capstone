@@ -10,11 +10,7 @@ import math
 import tf
 import numpy as np
 from std_msgs.msg import Int32
-#
-# from os import sys
-# from os import path
-# sys.path.append(path.dirname(path.dirname(path.abspath(__file__))))
-# import tools
+
 
 
 
@@ -35,7 +31,7 @@ TODO (for Yousuf and Aaron): Stopline location for each traffic light.
 
 LOOKAHEAD_WPS = 100 # Number of waypoints we will publish. You can change this number
 RATE = 50 # time (in miniseconds) for updater's sleeping
-REFERENCE_VELOCITY=4.5 # 4.5 m/s
+REFERENCE_VELOCITY=4.457 # 4.5 m/s
 BRAKE_VELOCITY=0
 WPNUM_CONSIDER_BRAKE= 50# consider braking when we have number of waypoint gaps to traffic light
 
@@ -105,22 +101,23 @@ class WaypointUpdater(object):
         rate=rospy.Rate(RATE)
         while not rospy.is_shutdown():
             if self.current_pos is None or self.current_waypoints is None:
-                rospy.logerr('waiting')
+                #rospy.logerr('waiting')
                 rate.sleep()
                 continue
 
             id_cloest=get_nearest_waypoint(self.current_pos,self.current_waypoints)
             if self.trafficlight is None:
                 self.trafficlight=-1
-            rospy.logerr('next waypoint: %i, next light: %d '%
-                         (id_cloest,self.trafficlight))
+            #rospy.logerr('next waypoint: %i, next light: %d '%
+            #             (id_cloest,self.trafficlight))
 
             new_waypoints=Lane()
             farest_waypoint=id_cloest+LOOKAHEAD_WPS
             current_v=REFERENCE_VELOCITY
+            new_waypoints.waypoints=self.current_waypoints[id_cloest:farest_waypoint]
 
             if self.trafficlight>id_cloest and self.trafficlight-id_cloest<WPNUM_CONSIDER_BRAKE:
-                rospy.logerr('brake')
+                #rospy.logerr('brake')
                 current_v=BRAKE_VELOCITY
 
             for k,w in enumerate(new_waypoints.waypoints):
