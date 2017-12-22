@@ -3,13 +3,13 @@
 TASK 1: update base_waypoints to final_waypoints
 '''
 import rospy
-from geometry_msgs.msg import PoseStamped
+from geometry_msgs.msg import PoseStamped,TwistStamped
 from styx_msgs.msg import Lane, Waypoint
 import math
 
 import tf
 import numpy as np
-from std_msgs.msg import Int32
+from std_msgs.msg import Int32,Bool
 
 
 
@@ -29,52 +29,59 @@ as well as to verify your TL classifier.
 TODO (for Yousuf and Aaron): Stopline location for each traffic light.
 '''
 
-LOOKAHEAD_WPS = 100 # Number of waypoints we will publish. You can change this number
+LOOKAHEAD_WPS = 50 # Number of waypoints we will publish. You can change this number
 RATE = 50 # time (in miniseconds) for updater's sleeping
-REFERENCE_VELOCITY=4.457 # 4.5 m/s
+REFERENCE_VELOCITY=4.47 # 4.47 m/s = ~ 10mph
 BRAKE_VELOCITY=0
-WPNUM_CONSIDER_BRAKE= 50# consider braking when we have number of waypoint gaps to traffic light
+SLOW_VELOCITY=5
+
+STOP_LINE_OFFSET=5
 
 
-class SimplePose():
-    '''Just work with x,y,z, theta'''
+CAR_STATE_DRVING=1
+CAR_STATE_STOPING=0
 
-    def __init__(self, pose=PoseStamped()):
-        self.pose = pose
-        self.x = pose.position.x
-        self.y = pose.position.y
-        self.z = pose.position.z
+REQ_DEACC=2 #required deaccletion
+MAX_DEACC=10
 
-        euler = tf.transformations.euler_from_quaternion([
-            pose.orientation.x,
-            pose.orientation.y,
-            pose.orientation.z,
-            pose.orientation.w])
-        self.theta = euler[2]
 
-    def __repr__(self):
-        return '<%.2f,%.2f,%.2f> (%.2f)' % (self.x, self.y, self.z, self.theta)
+def get_closest_waypoint(pose_x, pose_y, theta, waypoints):
+    """
+        Get the closest waypoint for a given position
+    :param pose_x:
+    :param pose_y:
+    :param theta:
+    :param waypoints:
+    :return:
+    """
+    # initial variables
+    closest_distance = 100000.0
+    closest_point = 0
 
-def distance(a, b):
-    '''return distance between two simple poses'''
-    return np.sqrt((a.x - b.x) ** 2 + (a.y - b.y) ** 2 + (a.z - b.z) ** 2)
+    for i in range(len(waypoints)):
+        # extract waypoint x,y
+        wp_x = waypoints[i].pose.pose.position.x
+        wp_y = waypoints[i].pose.pose.position.y
+        # compute distance from car x,y
+        distance = math.sqrt((wp_x - pose_x) ** 2 + (wp_y - pose_y) ** 2)
+        # is this point closer than others found so far
+        if distance < closest_distance:
+            closest_distance = distance
+            closest_point = i
 
-def get_nearest_waypoint(pos, waypoints):
-    '''returns the nearest waypoint index
-       pos a simple pos
-    '''
-    min_dist = 1e12
-    min_index = 0
-    for i, w in enumerate(waypoints):
-        wpose = SimplePose(w.pose.pose)
+    x = waypoints[closest_point].pose.pose.position.x
+    y = waypoints[closest_point].pose.pose.position.y
+    heading = np.arctan2((y - pose_y), (x - pose_x))
+    angle = np.abs(theta - heading)
+    if angle > np.pi / 4.:
+        closest_point += 1
+        if closest_point >= len(waypoints):
+            closest_point = 0
 
-        dist = distance(pos, wpose)
-        heading = np.arctan2(pos.y - wpose.y, pos.x - wpose.x)
-        dtheta = np.abs(heading - pos.theta)
-        if dist < min_dist and (dtheta <= np.pi / 4):
-            min_dist = dist
-            min_index = i
-    return min_index
+    return closest_point
+
+def get_stopping_distance(velocity,deacc):
+    return velocity*velocity/deacc
 
 class WaypointUpdater(object):
     def __init__(self):
@@ -86,6 +93,8 @@ class WaypointUpdater(object):
         self.base_waypoints_sub=rospy.Subscriber('/base_waypoints', Lane, self.waypoints_cb)
         # TODO: Add a subscriber for /traffic_waypoint and /obstacle_waypoint below
         rospy.Subscriber('/traffic_waypoint',Int32,self.traffic_cb)
+        rospy.Subscriber('/vehicle/dbw_enabled',Bool,self.dbw_cb)
+        rospy.Subscriber('/current_velocity',TwistStamped,self.velocity_cb)
 
         #publishing
         self.final_waypoints_pub = rospy.Publisher('final_waypoints', Lane, queue_size=1)
@@ -93,46 +102,94 @@ class WaypointUpdater(object):
         # TODO: Add other member variables you need below
         self.current_waypoints=None
         self.current_pos=None
-        self.trafficlight=None
+        self.current_velocity=None
+        self.trafficlight=-1
+        self.dbw_enabled=False
+        self.car_state=None
+        self.pose_x=-1
+        self.pose_y=-1
+        self.theta=0
 
         self.loop()
         #rospy.spin()
     def loop(self):
-        rate=rospy.Rate(RATE)
+        rate=rospy.Rate(RATE/5)
         while not rospy.is_shutdown():
-            if self.current_pos is None or self.current_waypoints is None:
+            if self.current_waypoints is None or self.dbw_enabled is False\
+    :
                 #rospy.logerr('waiting')
                 rate.sleep()
                 continue
+            if self.pose_x>-1 and self.pose_y>-1:
+                id_cloest=get_closest_waypoint(self.pose_x,self.pose_y,self.theta,self.current_waypoints)
 
-            id_cloest=get_nearest_waypoint(self.current_pos,self.current_waypoints)
+
+            start_velocity=self.get_waypoint_velocity(self.current_waypoints[id_cloest])
+            #rospy.logerr('start_velocity:%d',start_velocity)
+            #self.trafficlight = -1
             if self.trafficlight is None:
                 self.trafficlight=-1
-            #rospy.logerr('next waypoint: %i, next light: %d '%
-            #             (id_cloest,self.trafficlight))
 
-            new_waypoints=Lane()
-            farest_waypoint=id_cloest+LOOKAHEAD_WPS
-            current_v=REFERENCE_VELOCITY
-            new_waypoints.waypoints=self.current_waypoints[id_cloest:farest_waypoint]
+            if self.trafficlight == -1:
+                self.car_state=CAR_STATE_DRVING
+            else:#with trafficlight
+                rospy.logerr('waypoint_updator,trafficlight:%d'%self.trafficlight)
+                distance_to_light=self.distance(self.current_waypoints,id_cloest,self.trafficlight)
+                req_distance=get_stopping_distance(self.current_velocity,REQ_DEACC)
+                min_distance=get_stopping_distance(self.current_velocity,MAX_DEACC)
+                if distance_to_light-STOP_LINE_OFFSET<req_distance:#no enough distance to brake comfortably
+                    self.car_state=CAR_STATE_STOPING
+                    rospy.logerr('waypoint_updator,not enough for req_distance:%d'%req_distance)
+                else: #there is enough space to drive and then brake
+                    #still some time to drive
+                    self.car_state=CAR_STATE_DRVING
+                    rospy.logerr('enough for req_distance:%d'%req_distance)
+            rospy.logerr('waypoint_updator, car_state:%d'%self.car_state)
 
-            if self.trafficlight>id_cloest and self.trafficlight-id_cloest<WPNUM_CONSIDER_BRAKE:
-                #rospy.logerr('brake')
-                current_v=BRAKE_VELOCITY
+            #get velocity for the aheading waypoints
+            if self.car_state==CAR_STATE_DRVING:
+                #set the aheading wappoints as the reference speed, we follow them
+                for i in range(id_cloest,id_cloest+LOOKAHEAD_WPS):
+                    if i<len(self.current_waypoints):
+                        self.set_waypoint_velocity(self.current_waypoints,i,REFERENCE_VELOCITY)
+            else:
+                #slow down gradually to the waypoint just before the red light
+                for i in range(id_cloest,self.trafficlight+1):
+                    if(distance_to_light-STOP_LINE_OFFSET)>0:
+                        distance_to_i=self.distance(self.current_waypoints,id_cloest,i)
+                        velocity_waypoint_i=start_velocity-start_velocity*(distance_to_i)/(distance_to_light-STOP_LINE_OFFSET)
+                    else:
+                        velocity_waypoint_i=-10
+                    self.set_waypoint_velocity(self.current_waypoints, i, velocity_waypoint_i)
 
-            for k,w in enumerate(new_waypoints.waypoints):
-                w.twist.twist.linear.x=current_v
 
-            self.final_waypoints_pub.publish(new_waypoints)
+            waypoints_ahead=[]
+            for i in range(LOOKAHEAD_WPS):
+                if id_cloest+i<len(self.current_waypoints):
+                    waypoints_ahead.append(self.current_waypoints[id_cloest+i])
+            lane_ahead=Lane()
+            lane_ahead.waypoints=waypoints_ahead
+            lane_ahead.header.stamp=rospy.Time(0)
+
+            self.final_waypoints_pub.publish(lane_ahead)
             rate.sleep()
 
         pass
 
     def pose_cb(self, msg):
-        # TODO: Implement
-        self.current_pos=SimplePose(msg.pose)
+        # Implement
 
-        pass
+        # msg will be a geometry_msgs/PoseStamped message
+        # extract the current car x, y
+        self.pose_x = msg.pose.position.x
+        self.pose_y = msg.pose.position.y
+        orientation = msg.pose.orientation
+        euler = tf.transformations.euler_from_quaternion([
+            orientation.x,
+            orientation.y,
+            orientation.z,
+            orientation.w])
+        self.theta = euler[2]
 
     def waypoints_cb(self, waypoints):
         # TODO: Implement
@@ -150,6 +207,12 @@ class WaypointUpdater(object):
         # TODO: Callback for /obstacle_waypoint message. We will implement it later
 
         pass
+
+    def dbw_cb(self,msg):
+        self.dbw_enabled=msg.data
+
+    def velocity_cb(self,msg):
+        self.current_velocity=msg.twist.linear.x
 
     def get_waypoint_velocity(self, waypoint):
         return waypoint.twist.twist.linear.x

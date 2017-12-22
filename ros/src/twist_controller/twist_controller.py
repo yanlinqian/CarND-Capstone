@@ -8,11 +8,11 @@ ONE_MPH = 0.44704
 
 #costum parameters for pid controller
 PID_P_VEL=0.5
-PID_I_VEL=0.1
+PID_I_VEL=0.001
 PID_D_VEL=0.1
 
 PID_P_ACC=0.5
-PID_I_ACC=0.1
+PID_I_ACC=0.05
 PID_D_ACC=0.1
 
 MIN_SPEED=.5
@@ -48,7 +48,7 @@ class Controller(object):
                                           MIN_SPEED,
                                           self.max_lat_accel,
                                           self.max_steer_angle)
-        rospy.logerr('twist_controller.self() done')
+        #rospy.logerr('twist_controller.self() done')
         pass
 
     def control(self):
