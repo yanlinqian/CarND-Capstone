@@ -2,7 +2,8 @@
 # Udacity Self-Driving Car Engineer Nanodegree
 # System Integration Project
 
-
+### individual work
+### name: YANLIN QIAN email: yanlin.qian@tut.fi
 
 ## Introduction
 
